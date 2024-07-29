@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -57,11 +58,23 @@ public class HistoryDbAccessTests
         {
             return Task.FromResult((IEnumerable<Sale>)_data
                 .Select(d => d.Value)
-                .Where(sale =>
-                    sale.WorldId == worldId && sale.ItemId == itemId && sale.SaleTime <= (from ?? DateTime.UtcNow))
+            .Where(sale =>
+                    sale.WorldId == worldId && sale.ItemId == itemId && sale.SaleTime > (from ?? new DateTime()))
                 .OrderByDescending(sale => sale.SaleTime)
                 .Take(count)
                 .ToList());
+        }
+
+        public Task<IDictionary<WorldItemPair, IEnumerable<Sale>>> RetrieveManyBySaleTime(SaleManyQuery query, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult((IDictionary<WorldItemPair, IEnumerable<Sale>>)_data
+                .Select(d => d.Value)
+                .Where(sale =>
+                    query.WorldIds.Contains(sale.WorldId) && query.ItemIds.Contains(sale.ItemId) && sale.SaleTime <= (query.To ?? DateTime.UtcNow) && sale.SaleTime > (query.From ?? new DateTime()))
+                .GroupBy(sale => new WorldItemPair(sale.WorldId, sale.ItemId))
+                .ToDictionary(group => group.Key, group => group
+                    .OrderByDescending(sale => sale.SaleTime)
+                    .Take(query.Count)));
         }
 
         public Task<(TradeVelocity Nq, TradeVelocity Hq)> RetrieveUnitTradeVelocity(string worldIdDcRegion, int itemId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default)

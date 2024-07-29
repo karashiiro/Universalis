@@ -1,17 +1,18 @@
-﻿using System;
+﻿using Cassandra;
+using Cassandra.Data.Linq;
+using Cassandra.Mapping;
+using Microsoft.Extensions.Logging;
+using Prometheus;
+using StackExchange.Redis;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Cassandra;
-using Cassandra.Data.Linq;
-using Cassandra.Mapping;
-using Microsoft.Extensions.Logging;
-using Prometheus;
-using StackExchange.Redis;
 using Universalis.Common.GameData;
+using Universalis.DbAccess.Queries.MarketBoard;
 using Universalis.Entities.MarketBoard;
 
 namespace Universalis.DbAccess.MarketBoard;
@@ -205,6 +206,69 @@ public class SaleStore : ISaleStore, IDisposable
         }
     }
 
+    public async Task<IDictionary<WorldItemPair, IEnumerable<Sale>>> RetrieveManyBySaleTime(SaleManyQuery query, CancellationToken cancellationToken = default)
+    {
+        using var activity = Util.ActivitySource.StartActivity("SaleStore.RetrieveManyBySaleTime");
+
+        var worldItemPairs = query.WorldIds.SelectMany(worldId =>
+                query.ItemIds.Select(itemId => new WorldItemPair(worldId, itemId)))
+            .ToList();
+
+        var emptySales = new Dictionary<WorldItemPair, IEnumerable<Sale>>(worldItemPairs.Select(wip =>
+            new KeyValuePair<WorldItemPair, IEnumerable<Sale>>(wip, Enumerable.Empty<Sale>())));
+        if (query.Count == 0)
+        {
+            return emptySales;
+        }
+
+        // Fetch data from the database
+        var from = query.From == null ? 0 : new DateTimeOffset(query.From.Value).ToUnixTimeMilliseconds();
+        var to = query.To == null
+            ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            : new DateTimeOffset(query.To.Value).ToUnixTimeMilliseconds();
+        try
+        {
+            activity?.AddEvent(new ActivityEvent("CassandraFetchAsync"));
+            RowsReadCount.Observe(query.Count);
+            var dbSales = await _mapper.Value.FetchAsync<Sale>(
+                """
+                SELECT id, sale_time, item_id, world_id, buyer_name, hq, on_mannequin, quantity, unit_price, uploader_id
+                FROM sale
+                WHERE item_id IN ? AND world_id IN ? AND sale_time >= ? AND sale_time < ?
+                ORDER BY sale_time DESC
+                LIMIT ?
+                """,
+                query.ItemIds, query.WorldIds, from, to, query.Count);
+
+            // Group sales by world and item
+            var groupedSales = dbSales
+                .GroupBy(static sale => new WorldItemPair(sale.WorldId, sale.ItemId))
+                .AsParallel()
+                .ToDictionary(static group => group.Key, static group => group.Select(sale =>
+                {
+                    sale.SaleTime = DateTime.SpecifyKind(sale.SaleTime, DateTimeKind.Utc);
+                    return sale;
+                }));
+
+            // Fill any missing keys
+            foreach (var k in emptySales.Keys)
+            {
+                if (!groupedSales.ContainsKey(k))
+                {
+                    groupedSales[k] = Enumerable.Empty<Sale>();
+                }
+            }
+
+            return groupedSales;
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Failed to retrieve sales (worlds={}, items={})", string.Join(',', query.WorldIds),
+                string.Join(',', query.ItemIds));
+            throw;
+        }
+    }
+
     public async Task<(TradeVelocity Nq, TradeVelocity Hq)> RetrieveUnitTradeVelocity(string worldIdDcRegion, int itemId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
     {
         using var activity = Util.ActivitySource.StartActivity("SaleStore.RetrieveUnitTradeVelocity");
@@ -266,8 +330,8 @@ public class SaleStore : ISaleStore, IDisposable
     {
         for (var date = from; date <= to; date = date.AddDays(1))
             foreach (var isQuantity in new[] { false, true })
-            foreach (var isHq in new[] { false, true })
-                yield return new TradeVolumeCacheKey(isHq, isQuantity, GetTradeVolumeCacheKey(worldIdDcRegion, itemId, isHq, isQuantity, date));
+                foreach (var isHq in new[] { false, true })
+                    yield return new TradeVolumeCacheKey(isHq, isQuantity, GetTradeVolumeCacheKey(worldIdDcRegion, itemId, isHq, isQuantity, date));
     }
 
     public async Task<RecentSale> GetMostRecentSaleInWorld(int worldId, int itemId, bool hq, CancellationToken cancellationToken = default)

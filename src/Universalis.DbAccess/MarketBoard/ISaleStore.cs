@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Universalis.DbAccess.Queries.MarketBoard;
 using Universalis.Entities.MarketBoard;
 
 namespace Universalis.DbAccess.MarketBoard;
@@ -12,6 +13,8 @@ public interface ISaleStore
 
     Task<IEnumerable<Sale>> RetrieveBySaleTime(int worldId, int itemId, int count, DateTime? from = null,
         CancellationToken cancellationToken = default);
+
+    Task<IDictionary<WorldItemPair, IEnumerable<Sale>>> RetrieveManyBySaleTime(SaleManyQuery query, CancellationToken cancellationToken = default);
 
     Task<(TradeVelocity Nq, TradeVelocity Hq)> RetrieveUnitTradeVelocity(string worldIdDcRegion, int itemId, DateOnly from, DateOnly to,
         CancellationToken cancellationToken = default);

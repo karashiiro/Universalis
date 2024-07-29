@@ -1,11 +1,12 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using System.Threading.Tasks;
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using Universalis.DbAccess.MarketBoard;
+using Universalis.DbAccess.Queries.MarketBoard;
 using Universalis.Entities.MarketBoard;
 using Xunit;
-using System.Linq;
-using System.Collections.Generic;
 
 namespace Universalis.DbAccess.Tests.MarketBoard;
 
@@ -48,7 +49,7 @@ public class SaleStoreTests
     public async Task Insert_Null_DoesNotWork()
     {
         var store = _fixture.Services.GetRequiredService<ISaleStore>();
-        await Assert.ThrowsAsync<ArgumentNullException>(() => store.InsertMany( null));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => store.InsertMany(null));
     }
 
 #if DEBUG
@@ -78,17 +79,7 @@ public class SaleStoreTests
         Assert.Single(results);
         Assert.All(results, result =>
         {
-            Assert.Equal(sale.Id, result.Id);
-            Assert.Equal(sale.WorldId, result.WorldId);
-            Assert.Equal(sale.ItemId, result.ItemId);
-            Assert.Equal(sale.Hq, result.Hq);
-            Assert.Equal(sale.PricePerUnit, result.PricePerUnit);
-            Assert.Equal(sale.Quantity, result.Quantity);
-            Assert.Equal(sale.BuyerName, result.BuyerName);
-            Assert.Equal(sale.OnMannequin, result.OnMannequin);
-            Assert.Equal(sale.SaleTime, result.SaleTime);
-            Assert.Equal(DateTimeKind.Utc, result.SaleTime.Kind);
-            Assert.Equal(sale.UploaderIdHash, result.UploaderIdHash);
+            AssertEquals(sale, result);
         });
     }
 
@@ -136,18 +127,76 @@ public class SaleStoreTests
         Assert.All(sales.Zip(results), pair =>
         {
             var (sale, result) = pair;
-            Assert.Equal(sale.Id, result.Id);
-            Assert.Equal(sale.WorldId, result.WorldId);
-            Assert.Equal(sale.ItemId, result.ItemId);
-            Assert.Equal(sale.Hq, result.Hq);
-            Assert.Equal(sale.PricePerUnit, result.PricePerUnit);
-            Assert.Equal(sale.Quantity, result.Quantity);
-            Assert.Equal(sale.BuyerName, result.BuyerName);
-            Assert.Equal(sale.OnMannequin, result.OnMannequin);
-            Assert.Equal(sale.SaleTime, result.SaleTime);
-            Assert.Equal(DateTimeKind.Utc, result.SaleTime.Kind);
-            Assert.Equal(sale.UploaderIdHash, result.UploaderIdHash);
+            AssertEquals(sale, result);
         });
+    }
+
+#if DEBUG
+    [Fact]
+#endif
+    public async Task InsertManyRetrieveManyBySaleTime_Works()
+    {
+        var store = _fixture.Services.GetRequiredService<ISaleStore>();
+        var sales = new List<Sale>
+        {
+            new()
+            {
+                Id = Guid.NewGuid(),
+                WorldId = 26,
+                ItemId = 5333,
+                Hq = true,
+                PricePerUnit = 300,
+                Quantity = 20,
+                BuyerName = "Hello World",
+                OnMannequin = false,
+                SaleTime = new DateTime(2022, 10, 2, 0, 0, 0, DateTimeKind.Utc),
+                UploaderIdHash = "efuwhafejgj3weg0wrkporeh",
+            },
+            new()
+            {
+                Id = Guid.NewGuid(),
+                WorldId = 25,
+                ItemId = 5334,
+                Hq = true,
+                PricePerUnit = 300,
+                Quantity = 20,
+                BuyerName = "Hello World",
+                OnMannequin = false,
+                SaleTime = new DateTime(2022, 10, 1, 0, 0, 0, DateTimeKind.Utc),
+                UploaderIdHash = "efuwhafejgj3weg0wrkporeh",
+            },
+        };
+
+        await store.InsertMany(sales);
+        await Task.Delay(1000);
+        var resultsByWorldItem = await store.RetrieveManyBySaleTime(new SaleManyQuery
+        {
+            WorldIds = new[] { 25, 26 },
+            ItemIds = new[] { 5333, 5334, 5335 },
+            Count = 2
+        });
+
+        Assert.Equal(6, resultsByWorldItem.Count);
+        Assert.Empty(resultsByWorldItem[new WorldItemPair(25, 5333)]);
+        Assert.Empty(resultsByWorldItem[new WorldItemPair(25, 5335)]);
+        Assert.Empty(resultsByWorldItem[new WorldItemPair(26, 5334)]);
+        Assert.Empty(resultsByWorldItem[new WorldItemPair(26, 5335)]);
+        Assert.All(sales
+            .Where(s => s.WorldId == 25 && s.ItemId == 5334)
+            .OrderByDescending(s => s.SaleTime)
+            .Zip(resultsByWorldItem[new WorldItemPair(25, 5334)]), pair =>
+            {
+                var (sale, result) = pair;
+                AssertEquals(sale, result);
+            });
+        Assert.All(sales
+            .Where(s => s.WorldId == 26 && s.ItemId == 5333)
+            .OrderByDescending(s => s.SaleTime)
+            .Zip(resultsByWorldItem[new WorldItemPair(26, 5333)]), pair =>
+            {
+                var (sale, result) = pair;
+                AssertEquals(sale, result);
+            });
     }
 
 #if DEBUG
@@ -166,17 +215,7 @@ public class SaleStoreTests
         Assert.All(sales.Zip(results1.OrderByDescending(s => s.SaleTime)), pair =>
         {
             var (sale, result) = pair;
-            Assert.Equal(sale.Id, result.Id);
-            Assert.Equal(sale.WorldId, result.WorldId);
-            Assert.Equal(sale.ItemId, result.ItemId);
-            Assert.Equal(sale.Hq, result.Hq);
-            Assert.Equal(sale.PricePerUnit, result.PricePerUnit);
-            Assert.Equal(sale.Quantity, result.Quantity);
-            Assert.Equal(sale.BuyerName, result.BuyerName);
-            Assert.Equal(sale.OnMannequin, result.OnMannequin);
-            Assert.Equal(new DateTimeOffset(sale.SaleTime).ToUnixTimeSeconds(), new DateTimeOffset(result.SaleTime).ToUnixTimeSeconds());
-            Assert.Equal(DateTimeKind.Utc, result.SaleTime.Kind);
-            Assert.Equal(sale.UploaderIdHash, result.UploaderIdHash);
+            AssertEquals(sale, result);
         });
     }
 
@@ -243,9 +282,9 @@ public class SaleStoreTests
         await store.InsertMany(sales);
 
         var nqQuantity = sales.Where(s => !s.Hq).Sum(s => s.Quantity) ?? 0;
-        var nqSumSales = sales.Where(s => !s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        var nqSumSales = sales.Where(s => !s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         var hqQuantity = sales.Where(s => s.Hq).Sum(s => s.Quantity) ?? 0;
-        var hqSumSales = sales.Where(s => s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        var hqSumSales = sales.Where(s => s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         var result = await store.RetrieveUnitTradeVelocity("92", 2, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow));
         Assert.Equal(nqQuantity, result.Nq.Quantity);
         Assert.Equal(nqSumSales, result.Nq.SumSales);
@@ -290,9 +329,9 @@ public class SaleStoreTests
         await store.InsertMany(salesOtherItem);
 
         var nqQuantity = sales39.Where(s => !s.Hq).Sum(s => s.Quantity) ?? 0;
-        var nqSumSales = sales39.Where(s => !s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        var nqSumSales = sales39.Where(s => !s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         var hqQuantity = sales39.Where(s => s.Hq).Sum(s => s.Quantity) ?? 0;
-        var hqSumSales = sales39.Where(s => s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        var hqSumSales = sales39.Where(s => s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         var result = await store.RetrieveUnitTradeVelocity("39", 2, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow));
         Assert.Equal(nqQuantity, result.Nq.Quantity);
         Assert.Equal(nqSumSales, result.Nq.SumSales);
@@ -302,9 +341,9 @@ public class SaleStoreTests
         Assert.True(hqQuantity <= result.Hq.AvgSalesPerDay);
 
         nqQuantity += sales40.Where(s => !s.Hq).Sum(s => s.Quantity) ?? 0;
-        nqSumSales += sales40.Where(s => !s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        nqSumSales += sales40.Where(s => !s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         hqQuantity += sales40.Where(s => s.Hq).Sum(s => s.Quantity) ?? 0;
-        hqSumSales += sales40.Where(s => s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        hqSumSales += sales40.Where(s => s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         result = await store.RetrieveUnitTradeVelocity("Chaos", 2, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow));
         Assert.Equal(nqQuantity, result.Nq.Quantity);
         Assert.Equal(nqSumSales, result.Nq.SumSales);
@@ -314,9 +353,9 @@ public class SaleStoreTests
         Assert.True(hqQuantity <= result.Hq.AvgSalesPerDay);
 
         nqQuantity += sales36.Where(s => !s.Hq).Sum(s => s.Quantity) ?? 0;
-        nqSumSales += sales36.Where(s => !s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        nqSumSales += sales36.Where(s => !s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         hqQuantity += sales36.Where(s => s.Hq).Sum(s => s.Quantity) ?? 0;
-        hqSumSales += sales36.Where(s => s.Hq).Sum(s => s.Quantity * (long) s.PricePerUnit) ?? 0;
+        hqSumSales += sales36.Where(s => s.Hq).Sum(s => s.Quantity * (long)s.PricePerUnit) ?? 0;
         result = await store.RetrieveUnitTradeVelocity("Europe", 2, DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow));
         Assert.Equal(nqQuantity, result.Nq.Quantity);
         Assert.Equal(nqSumSales, result.Nq.SumSales);
@@ -324,5 +363,20 @@ public class SaleStoreTests
         Assert.Equal(hqQuantity, result.Hq.Quantity);
         Assert.Equal(hqSumSales, result.Hq.SumSales);
         Assert.True(hqQuantity <= result.Hq.AvgSalesPerDay);
+    }
+
+    private static void AssertEquals(Sale expected, Sale actual)
+    {
+        Assert.Equal(actual.Id, expected.Id);
+        Assert.Equal(actual.WorldId, expected.WorldId);
+        Assert.Equal(actual.ItemId, expected.ItemId);
+        Assert.Equal(actual.Hq, expected.Hq);
+        Assert.Equal(actual.PricePerUnit, expected.PricePerUnit);
+        Assert.Equal(actual.Quantity, expected.Quantity);
+        Assert.Equal(actual.BuyerName, expected.BuyerName);
+        Assert.Equal(actual.OnMannequin, expected.OnMannequin);
+        Assert.Equal(new DateTimeOffset(actual.SaleTime).ToUnixTimeSeconds(), new DateTimeOffset(expected.SaleTime).ToUnixTimeSeconds());
+        Assert.Equal(DateTimeKind.Utc, expected.SaleTime.Kind);
+        Assert.Equal(actual.UploaderIdHash, expected.UploaderIdHash);
     }
 }
